@@ -12,9 +12,9 @@ IGNORE_PROCESSES = {
     "wininit.exe",
     "services.exe",
     "lsass.exe",
-    "svchost.exe",          # too many instances, noisy
+    "svchost.exe",
     "fontdrvhost.exe",
-    "dwm.exe",              # Desktop Window Manager - usually not actionable
+    "dwm.exe",
     "conhost.exe",
     "runtimebroker.exe",
     "sihost.exe",
@@ -24,6 +24,7 @@ IGNORE_PROCESSES = {
     "startmenuexperiencehost.exe",
     "shellexperiencehost.exe",
     "textinputhost.exe",
+    "itops-assistant.exe",  # ourselves
 }
 
 

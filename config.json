@@ -1,0 +1,41 @@
+{
+  "version": "1.0",
+  "thresholds": {
+    "cpu_warning": 70,
+    "cpu_critical": 90,
+    "ram_warning": 75,
+    "ram_critical": 90,
+    "disk_warning": 70,
+    "disk_high": 85,
+    "disk_critical": 95,
+    "history_cpu_change": 10,
+    "history_ram_change": 8,
+    "history_disk_change": 3,
+    "history_gateway_latency_change": 5,
+    "history_internet_latency_change": 15
+  },
+  "auto_fix": {
+    "enabled": true,
+    "flush_dns": true,
+    "restart_dns_client": true,
+    "clean_temp": true,
+    "empty_recycle_bin": true,
+    "disk_cleanup": true
+  },
+  "export": {
+    "enabled": true,
+    "json": true,
+    "html": true,
+    "folder": "reports"
+  },
+  "history": {
+    "enabled": true,
+    "file": "last_report.json"
+  },
+  "display": {
+    "show_processes": true,
+    "show_auto_fixes": true,
+    "show_changes": true,
+    "process_limit": 5
+  }
+}

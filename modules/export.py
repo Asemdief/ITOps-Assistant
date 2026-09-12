@@ -1,13 +1,12 @@
 import json
 import os
 from datetime import datetime
+from modules.paths import get_app_dir
 
 
 def _get_export_dir():
-    """Return folder for exported reports (project root / reports)."""
-    modules_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(modules_dir)
-    reports_dir = os.path.join(project_root, "reports")
+    """Return folder for exported reports (next to .exe or project root)."""
+    reports_dir = os.path.join(get_app_dir(), "reports")
     os.makedirs(reports_dir, exist_ok=True)
     return reports_dir
 

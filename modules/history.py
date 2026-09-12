@@ -1,31 +1,15 @@
 import json
 import os
 from datetime import datetime
+from modules.paths import get_app_dir
 
 
 HISTORY_FILE = "last_report.json"
 
 
 def _get_history_path():
-    """
-    Return path to history file.
-    Priority:
-      1. Same folder as main.py (project root)
-      2. Current working directory
-    """
-    # Try project root (parent of modules/)
-    try:
-        modules_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(modules_dir)
-        path = os.path.join(project_root, HISTORY_FILE)
-        # Test if we can write there
-        if os.path.isdir(project_root):
-            return path
-    except Exception:
-        pass
-
-    # Fallback: current working directory
-    return os.path.join(os.getcwd(), HISTORY_FILE)
+    """Return path to history file (next to .exe or project root)."""
+    return os.path.join(get_app_dir(), HISTORY_FILE)
 
 
 def save_report(data):

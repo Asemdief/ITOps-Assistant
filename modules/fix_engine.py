@@ -140,7 +140,6 @@ def run_auto_fixes(root_cause):
 
     if dns_issues or network_issues:
         results.append(flush_dns())
-        # Stronger action if DNS specifically mentioned
         if dns_issues:
             results.append(restart_dns_client())
 
