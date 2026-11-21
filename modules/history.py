@@ -1,128 +1,91 @@
+"""History compare/save next to the app — no console."""
+
+from __future__ import annotations
+
 import json
 import os
 from datetime import datetime
+
 from modules.paths import get_app_dir
 
 
-HISTORY_FILE = "last_report.json"
+def _history_path() -> str:
+    d = os.path.join(get_app_dir(), "reports")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, "last_snapshot.json")
 
 
-def _get_history_path():
-    """Return path to history file (next to .exe or project root)."""
-    return os.path.join(get_app_dir(), HISTORY_FILE)
-
-
-def save_report(data):
-    """
-    Save a lightweight snapshot of the current report.
-    """
-    snapshot = {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "computer_name": data["system"].get("computer_name"),
-        "cpu_usage": data["cpu"].get("usage_percent"),
-        "ram_usage": data["ram"].get("usage_percent"),
-        "disk": [
-            {
-                "device": d["device"],
-                "usage_percent": d["usage_percent"],
-                "status": d["status"]
-            }
-            for d in data.get("disk", [])
-        ],
-        "network": {
-            "adapter": data["network"].get("adapter"),
-            "ip": data["network"].get("ip"),
-            "status": data["network"].get("status"),
-            "gateway_latency": data["network"].get("gateway_latency", {}).get("avg_ms"),
-            "internet_latency": data["network"].get("internet_latency", {}).get("avg_ms"),
-        },
-        "health_score": data["health"].get("score"),
-    }
-
-    try:
-        path = _get_history_path()
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(snapshot, f, indent=2, ensure_ascii=False)
-    except OSError:
-        pass  # Fail silently if can't write
-
-
-def load_previous_report():
-    """
-    Load the previous report snapshot if it exists.
-    """
-    path = _get_history_path()
-    if not os.path.exists(path):
+def load_previous_report() -> dict | None:
+    path = _history_path()
+    if not os.path.isfile(path):
         return None
-
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
 
 
-def compare_reports(current_data, previous):
-    """
-    Compare current data with previous snapshot.
-    Returns a list of human-readable change messages.
-    """
+def save_report(data: dict) -> None:
+    path = _history_path()
+    snap = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "cpu": data.get("cpu"),
+        "ram": data.get("ram"),
+        "disk": data.get("disk"),
+        "health": data.get("health"),
+        "network": data.get("network"),
+    }
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(snap, f, indent=2, ensure_ascii=False, default=str)
+    except OSError:
+        pass
+
+
+def compare_reports(current: dict, previous: dict | None) -> list[str]:
     if not previous:
-        return []
+        return ["No previous report found (or no significant changes)"]
 
-    changes = []
+    changes: list[str] = []
+    try:
+        c_cpu = float((current.get("cpu") or {}).get("usage_percent") or 0)
+        p_cpu = float((previous.get("cpu") or {}).get("usage_percent") or 0)
+        d = c_cpu - p_cpu
+        if abs(d) >= 5:
+            arrow = "↑" if d > 0 else "↓"
+            changes.append(f"CPU usage {arrow} {abs(d):.1f}%  ({p_cpu:.1f}% → {c_cpu:.1f}%)")
 
-    # CPU
-    curr_cpu = current_data["cpu"].get("usage_percent", 0)
-    prev_cpu = previous.get("cpu_usage", 0)
-    diff_cpu = curr_cpu - prev_cpu
-    if abs(diff_cpu) >= 10:
-        direction = "↑" if diff_cpu > 0 else "↓"
-        changes.append(f"CPU usage {direction} {abs(diff_cpu):.1f}%  ({prev_cpu}% → {curr_cpu}%)")
+        c_ram = float((current.get("ram") or {}).get("usage_percent") or 0)
+        p_ram = float((previous.get("ram") or {}).get("usage_percent") or 0)
+        d = c_ram - p_ram
+        if abs(d) >= 5:
+            arrow = "↑" if d > 0 else "↓"
+            changes.append(f"RAM usage {arrow} {abs(d):.1f}%  ({p_ram:.1f}% → {c_ram:.1f}%)")
 
-    # RAM
-    curr_ram = current_data["ram"].get("usage_percent", 0)
-    prev_ram = previous.get("ram_usage", 0)
-    diff_ram = curr_ram - prev_ram
-    if abs(diff_ram) >= 8:
-        direction = "↑" if diff_ram > 0 else "↓"
-        changes.append(f"RAM usage {direction} {abs(diff_ram):.1f}%  ({prev_ram}% → {curr_ram}%)")
+        c_h = int((current.get("health") or {}).get("score") or 0)
+        p_h = int((previous.get("health") or {}).get("score") or 0)
+        d = c_h - p_h
+        if abs(d) >= 3:
+            arrow = "↑" if d > 0 else "↓"
+            changes.append(f"Health score {arrow} {abs(d)} points  ({p_h} → {c_h})")
 
-    # Disks
-    prev_disks = {d["device"]: d for d in previous.get("disk", [])}
-    for disk in current_data.get("disk", []):
-        device = disk["device"]
-        curr_usage = disk["usage_percent"]
-        if device in prev_disks:
-            prev_usage = prev_disks[device]["usage_percent"]
-            diff = curr_usage - prev_usage
-            if abs(diff) >= 3:
-                direction = "↑" if diff > 0 else "↓"
+        prev_disks = {d.get("device"): d for d in (previous.get("disk") or [])}
+        for d in current.get("disk") or []:
+            dev = d.get("device")
+            if dev not in prev_disks:
+                continue
+            c_u = float(d.get("usage_percent") or 0)
+            p_u = float(prev_disks[dev].get("usage_percent") or 0)
+            delta = c_u - p_u
+            if abs(delta) >= 2:
+                arrow = "↑" if delta > 0 else "↓"
                 changes.append(
-                    f"{device} usage {direction} {abs(diff):.1f}%  ({prev_usage}% → {curr_usage}%)"
+                    f"{dev} usage {arrow} {abs(delta):.1f}%  ({p_u:.1f}% → {c_u:.1f}%)"
                 )
+    except (TypeError, ValueError):
+        pass
 
-    # Latency
-    curr_net = current_data.get("network", {})
-    prev_net = previous.get("network", {})
-
-    curr_gw = curr_net.get("gateway_latency", {}).get("avg_ms")
-    prev_gw = prev_net.get("gateway_latency")
-    if curr_gw is not None and prev_gw is not None and abs(curr_gw - prev_gw) >= 5:
-        direction = "↑" if curr_gw > prev_gw else "↓"
-        changes.append(f"Gateway latency {direction} {abs(curr_gw - prev_gw):.0f} ms")
-
-    curr_inet = curr_net.get("internet_latency", {}).get("avg_ms")
-    prev_inet = prev_net.get("internet_latency")
-    if curr_inet is not None and prev_inet is not None and abs(curr_inet - prev_inet) >= 15:
-        direction = "↑" if curr_inet > prev_inet else "↓"
-        changes.append(f"Internet latency {direction} {abs(curr_inet - prev_inet):.0f} ms")
-
-    # Health score
-    curr_score = current_data["health"].get("score", 0)
-    prev_score = previous.get("health_score", 0)
-    if curr_score != prev_score:
-        direction = "↑" if curr_score > prev_score else "↓"
-        changes.append(f"Health score {direction} {abs(curr_score - prev_score)} points  ({prev_score} → {curr_score})")
-
+    if not changes:
+        return ["No significant changes since last run"]
     return changes

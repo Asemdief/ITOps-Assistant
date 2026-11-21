@@ -1,59 +1,55 @@
-def analyze_root_cause(data):
-    """
-    Analyze collected data and identify root causes with specific disk issues.
-    """
-    issues = []
-    suggestions = []
+"""Root cause analysis from collected data."""
 
-    # ================= RAM =================
-    if data["ram"]["usage_percent"] > 75:
-        issues.append("High RAM usage")
-        suggestions.append("Close memory intensive applications")
+from __future__ import annotations
 
-    # ================= DISK =================
-    for disk in data["disk"]:
-        usage = disk["usage_percent"]
-        drive = disk["device"]
 
-        if usage >= 95:
-            issues.append(f"Critical disk space on {drive}")
-            suggestions.append(
-                f"Immediately free space on {drive} (delete large files or move data)"
-            )
-        elif usage >= 85:
-            issues.append(f"High disk usage on {drive}")
-            suggestions.append(
-                f"Clean temporary files and large folders on {drive}"
-            )
-        elif usage >= 70:
-            issues.append(f"Elevated disk usage on {drive}")
-            suggestions.append(
-                f"Monitor free space on {drive} and remove unused files"
-            )
+def analyze_root_cause(data: dict) -> dict:
+    issues: list[str] = []
+    suggestions: list[str] = []
 
-    # ================= NETWORK =================
-    network = data["network"]
+    for d in data.get("disk") or []:
+        pct = float(d.get("usage_percent") or 0)
+        dev = d.get("device", "Drive")
+        if pct >= 85:
+            issues.append(f"High disk usage on {dev}")
+            suggestions.append(f"Clean temporary files and large folders on {dev}")
+        elif pct >= 70:
+            issues.append(f"Elevated disk usage on {dev}")
+            suggestions.append(f"Monitor free space on {dev} and remove unused files")
 
-    if not network["internet_ok"]:
+    cpu = data.get("cpu") or {}
+    if float(cpu.get("usage_percent") or 0) >= 85:
+        issues.append("High CPU usage")
+        suggestions.append("Close heavy applications or check background processes")
+
+    ram = data.get("ram") or {}
+    if float(ram.get("usage_percent") or 0) >= 90:
+        issues.append("High memory pressure")
+        suggestions.append("Close unused apps or add RAM if this is frequent")
+
+    net = data.get("network") or {}
+    internet_ok = bool(net.get("internet_ok"))
+    gateway_ok = bool(net.get("gateway_ok"))
+    dns_ok = bool(net.get("dns_ok"))
+
+    # HARD RULE alignment: if internet path works, do NOT raise gateway as an issue.
+    # Gateway ICMP often fails while browsing works (router blocks ping).
+    if not internet_ok:
         issues.append("Internet connectivity issue")
-        suggestions.append("Check ISP or physical connection")
-    elif not network["dns_ok"]:
+        suggestions.append("Check ISP, Wi-Fi/Ethernet link, or router status")
+        if not gateway_ok:
+            suggestions.append("Gateway did not respond — verify router is on and reachable")
+        if not dns_ok:
+            suggestions.append("DNS failed — try flush DNS or alternate resolvers")
+    elif not dns_ok:
         issues.append("DNS resolution issue")
-        suggestions.append("Check DNS server settings")
-    elif not network["gateway_ok"]:
-        issues.append("Gateway unreachable")
-        suggestions.append("Check switch port or router")
+        suggestions.append("Flush DNS or try alternate DNS servers")
+    # gateway-only failure while internet_ok: informational, not an issue
 
-    # ================= STATUS =================
-    if len(issues) == 0:
-        status = "Healthy"
-    elif len(issues) == 1:
-        status = "Minor Issues"
-    else:
+    if not issues:
+        return {"status": "Healthy", "issues": [], "suggestions": []}
+    if len(issues) >= 2:
         status = "Multiple Issues Detected"
-
-    return {
-        "status": status,
-        "issues": issues,
-        "suggestions": suggestions
-    }
+    else:
+        status = "Minor Issues"
+    return {"status": status, "issues": issues, "suggestions": suggestions}

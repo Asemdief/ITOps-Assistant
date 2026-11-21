@@ -1,356 +1,274 @@
-import psutil
-import socket
-import subprocess
+"""
+Network diagnostics — silent (no CMD).
+
+Rule: if DNS resolves public names OR TCP/HTTPS works, Internet is OK.
+ICMP ping alone is NOT trusted (many ISPs block it).
+"""
+
+from __future__ import annotations
+
 import re
-import ipaddress
+import socket
+import time
+import urllib.error
+import urllib.request
+
+import psutil
+
+from modules.win_silent import run_silent
 
 
-# Common Virtual MAC OUI prefixes (first 3 bytes)
-VIRTUAL_MAC_PREFIXES = {
-    "0A:00:27",   # VirtualBox
-    "08:00:27",   # VirtualBox
-    "00:50:56",   # VMware
-    "00:0C:29",   # VMware
-    "00:05:69",   # VMware
-    "00:1C:42",   # Parallels
-    "00:15:5D",   # Hyper-V
-    "00:03:FF",   # Microsoft Virtual
-    "52:54:00",   # QEMU/KVM
-    "00:16:3E",   # Xen
-}
+def _parse_ping(text: str) -> tuple[float | None, float]:
+    avg = None
+    loss = 0.0
+    m_avg = re.search(r"Average\s*=\s*(\d+)\s*ms", text, re.I)
+    if not m_avg:
+        m_avg = re.search(r"Average\s*=\s*(\d+)", text, re.I)
+    if m_avg:
+        avg = float(m_avg.group(1))
+    m_loss = re.search(r"\((\d+)%\s*(?:loss|lost)\)", text, re.I)
+    if not m_loss:
+        m_loss = re.search(r"Lost\s*=\s*\d+\s*\((\d+)%", text, re.I)
+    if m_loss:
+        loss = float(m_loss.group(1))
+    if avg is None:
+        times = [float(x) for x in re.findall(r"[=<]\s*(\d+)\s*ms", text, re.I)]
+        if times:
+            avg = sum(times) / len(times)
+    return avg, loss
 
 
-VIRTUAL_NAME_KEYWORDS = (
-    "virtual",
-    "vmware",
-    "virtualbox",
-    "vbox",
-    "hyper-v",
-    "vethernet",
-    "loopback",
-    "vpn",
-    "tunnel",
-    "bluetooth",
-    "npcap",
-    "host-only",
-    "host only",
-    "docker",
-    "wsl",
-    "tap-",
-    "tun-",
-)
+def ping_host(host: str, count: int = 2) -> dict:
+    try:
+        r = run_silent(["ping", "-n", str(count), "-w", "1000", host], timeout=5)
+        text = (r.stdout or "") + (r.stderr or "")
+        avg, loss = _parse_ping(text)
+        reachable = ("TTL=" in text or "ttl=" in text) or (
+            r.returncode == 0 and avg is not None
+        )
+        if reachable and avg is None:
+            avg = 0.0
+        return {
+            "avg_ms": avg,
+            "loss_percent": loss,
+            "reachable": bool(reachable),
+            "method": "icmp",
+        }
+    except Exception:
+        return {
+            "avg_ms": None,
+            "loss_percent": 100.0,
+            "reachable": False,
+            "method": "icmp",
+        }
 
 
-def is_virtual_adapter(name: str, mac: str | None) -> bool:
-    """Check if adapter is virtual by name or MAC OUI."""
-    name_lower = name.lower()
+def tcp_probe(host: str, port: int = 443, timeout: float = 2.0) -> dict:
+    t0 = time.perf_counter()
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            pass
+        ms = round((time.perf_counter() - t0) * 1000)
+        return {
+            "avg_ms": float(ms),
+            "loss_percent": 0.0,
+            "reachable": True,
+            "method": f"tcp:{port}",
+        }
+    except OSError:
+        return {
+            "avg_ms": None,
+            "loss_percent": 100.0,
+            "reachable": False,
+            "method": f"tcp:{port}",
+        }
 
-    if any(kw in name_lower for kw in VIRTUAL_NAME_KEYWORDS):
-        return True
 
-    if mac:
-        # Normalize MAC to uppercase with colons
-        mac_norm = mac.upper().replace("-", ":")
-        prefix = ":".join(mac_norm.split(":")[:3])
-        if prefix in VIRTUAL_MAC_PREFIXES:
+def http_probe(url: str = "http://www.msftconnecttest.com/connecttest.txt", timeout: float = 2.5) -> dict:
+    """Windows NCSI-style connectivity check (HTTP, no ICMP)."""
+    t0 = time.perf_counter()
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "ITOps-Command/1.4"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read(64)
+            ms = round((time.perf_counter() - t0) * 1000)
+            ok = getattr(resp, "status", 200) == 200
+            return {
+                "avg_ms": float(ms),
+                "loss_percent": 0.0 if ok else 100.0,
+                "reachable": bool(ok),
+                "method": "http",
+            }
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError):
+        return {
+            "avg_ms": None,
+            "loss_percent": 100.0,
+            "reachable": False,
+            "method": "http",
+        }
+
+
+def dns_ok() -> bool:
+    for host in ("www.msftconnecttest.com", "dns.google", "one.one.one.one", "www.google.com"):
+        try:
+            socket.setdefaulttimeout(1.5)
+            socket.gethostbyname(host)
             return True
-
+        except OSError:
+            continue
     return False
 
 
-def get_adapter_details():
-    """
-    Collect all active IPv4 network adapters.
-    """
-    interfaces = psutil.net_if_addrs()
+def _pick_adapter() -> dict:
     stats = psutil.net_if_stats()
+    addrs = psutil.net_if_addrs()
+    candidates = []
 
-    adapters = []
-
-    for name, addrs in interfaces.items():
-        if name not in stats:
+    for name, addr_list in addrs.items():
+        st = stats.get(name)
+        if st and not st.isup:
             continue
-
-        stat = stats[name]
-        if not stat.isup:
-            continue
-
         ipv4 = None
         mac = None
-        netmask = None
-
-        for addr in addrs:
-            if addr.family == socket.AF_INET:
-                ipv4 = addr.address
-                netmask = addr.netmask
-            elif addr.family == psutil.AF_LINK:
-                mac = addr.address
+        for a in addr_list:
+            fam = getattr(a, "family", None)
+            if fam == socket.AF_INET:
+                if a.address and not a.address.startswith("127."):
+                    ipv4 = a.address
+            if hasattr(psutil, "AF_LINK") and fam == psutil.AF_LINK:
+                mac = a.address
+            elif fam == 17 or str(fam) == "AddressFamily.AF_PACKET":
+                mac = a.address
 
         if not ipv4:
             continue
 
-        # Ignore APIPA and loopback
-        if ipv4.startswith("169.254.") or ipv4.startswith("127."):
-            continue
+        score = 0
+        low = name.lower()
+        if "wi-fi" in low or "wifi" in low or "wlan" in low:
+            score += 50
+        if "ethernet" in low and "vethernet" not in low:
+            score += 40
+        if any(x in low for x in ("virtual", "vbox", "vmware", "hyper-v", "loopback", "bluetooth")):
+            score -= 80
+        if ipv4.startswith(("192.168.", "10.")):
+            score += 10
+        if ipv4.startswith("192.168.56."):
+            score -= 40
+        if ipv4.startswith("169.254."):
+            score -= 60
 
-        adapters.append({
-            "name": name,
-            "ip": ipv4,
-            "netmask": netmask,
-            "mac": mac,
-            "is_virtual": is_virtual_adapter(name, mac)
-        })
-
-    return adapters
-
-
-def get_default_gateway():
-    """
-    Get the best default gateway from Windows routing table.
-    Prefers the route with the lowest metric when multiple exist.
-    Returns: (gateway, interface_ip) or (None, None)
-    """
-    try:
-        output = subprocess.check_output(
-            ["route", "print", "-4"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-            encoding="utf-8",
-            errors="ignore"
+        candidates.append(
+            {"adapter": name, "ip": ipv4, "mac": mac or "n/a", "score": score}
         )
 
-        candidates = []
+    if not candidates:
+        return {"adapter": "Unknown", "ip": "n/a", "mac": "n/a"}
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    best = candidates[0]
+    return {"adapter": best["adapter"], "ip": best["ip"], "mac": best["mac"]}
 
-        for line in output.splitlines():
-            line = line.strip()
 
-            # Default route lines look like:
-            # 0.0.0.0  0.0.0.0  <gateway>  <interface>  <metric>
-            if not line.startswith("0.0.0.0"):
-                continue
-
-            parts = re.split(r"\s+", line)
-            if len(parts) < 4:
-                continue
-
-            gateway = parts[2]
-            interface_ip = parts[3]
-
-            # Skip invalid
-            if gateway == "0.0.0.0" or gateway.startswith("127."):
-                continue
-
-            # Metric is usually the last column
-            metric = 9999
-            if len(parts) >= 5 and parts[-1].isdigit():
-                metric = int(parts[-1])
-
-            candidates.append((metric, gateway, interface_ip))
-
-        if candidates:
-            # Sort by metric (lowest = preferred)
-            candidates.sort(key=lambda x: x[0])
-            _, gateway, interface_ip = candidates[0]
-            return gateway, interface_ip
-
-    except (subprocess.CalledProcessError, OSError, ValueError):
+def _default_gateway() -> str | None:
+    try:
+        r = run_silent(["ipconfig"], timeout=8)
+        text = r.stdout or ""
+        for gw in re.findall(
+            r"Default Gateway[.\s]*:\s*([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)",
+            text,
+            re.I,
+        ):
+            if gw and not gw.startswith("0."):
+                return gw
+        r2 = run_silent(["route", "print", "0.0.0.0"], timeout=6)
+        m = re.search(
+            r"0\.0\.0\.0\s+0\.0\.0\.0\s+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)",
+            r2.stdout or "",
+        )
+        if m:
+            return m.group(1)
+    except Exception:
         pass
-
-    return None, None
-
-
-def same_subnet(ip1: str, ip2: str, netmask: str | None = None) -> bool:
-    """Check if two IPs are in the same subnet."""
-    try:
-        if netmask:
-            network = ipaddress.IPv4Network(f"{ip1}/{netmask}", strict=False)
-            return ipaddress.IPv4Address(ip2) in network
-        # Fallback: assume /24
-        return ip1.rsplit(".", 1)[0] == ip2.rsplit(".", 1)[0]
-    except (ValueError, ipaddress.AddressValueError):
-        return False
+    return None
 
 
-def get_active_adapter():
-    """
-    Identify the real active adapter used for internet traffic.
-    Priority order:
-      1. Exact match with interface IP from default route
-      2. Non-virtual adapter in the same subnet as the gateway
-      3. Any non-virtual adapter
-      4. Fallback to first available
-    """
-    adapters = get_adapter_details()
+def _probe_internet() -> dict:
+    """HTTP → TCP 443 → ICMP → DNS."""
+    h = http_probe()
+    if h["reachable"]:
+        return {**h, "note": None}
 
-    if not adapters:
-        return None, None, None, None
+    for host in ("1.1.1.1", "8.8.8.8", "9.9.9.9"):
+        t = tcp_probe(host, 443)
+        if t["reachable"]:
+            return {**t, "note": "TCP 443 OK"}
 
-    gateway, route_ip = get_default_gateway()
+    for host in ("1.1.1.1", "8.8.8.8"):
+        p = ping_host(host, count=1)
+        if p["reachable"]:
+            return {**p, "note": None}
 
-    # ---------- Priority 1: Exact match on route interface IP ----------
-    if route_ip:
-        for adapter in adapters:
-            if adapter["ip"] == route_ip:
-                return (
-                    adapter["name"],
-                    adapter["ip"],
-                    adapter["mac"],
-                    adapter["netmask"]
-                )
-
-    # ---------- Priority 2: Same subnet as gateway + non-virtual ----------
-    if gateway:
-        for adapter in adapters:
-            if adapter["is_virtual"]:
-                continue
-            if same_subnet(adapter["ip"], gateway, adapter["netmask"]):
-                return (
-                    adapter["name"],
-                    adapter["ip"],
-                    adapter["mac"],
-                    adapter["netmask"]
-                )
-
-    # ---------- Priority 3: Any non-virtual adapter ----------
-    physical = [a for a in adapters if not a["is_virtual"]]
-    if physical:
-        adapter = physical[0]
-        return (
-            adapter["name"],
-            adapter["ip"],
-            adapter["mac"],
-            adapter["netmask"]
-        )
-
-    # ---------- Priority 4: Last resort ----------
-    adapter = adapters[0]
-    return (
-        adapter["name"],
-        adapter["ip"],
-        adapter["mac"],
-        adapter["netmask"]
-    )
-
-
-def check_gateway(gateway):
-    """Test connectivity to the default gateway."""
-    if not gateway:
-        return False
-
-    try:
-        subprocess.check_output(
-            ["ping", "-n", "1", "-w", "1000", gateway],
-            stderr=subprocess.DEVNULL
-        )
-        return True
-    except (subprocess.CalledProcessError, OSError):
-        return False
-
-
-def check_dns():
-    """Test DNS resolution."""
-    try:
-        socket.gethostbyname("google.com")
-        return True
-    except socket.gaierror:
-        return False
-
-
-def check_internet():
-    """Test actual Internet connectivity using a public IP."""
-    try:
-        subprocess.check_output(
-            ["ping", "-n", "1", "-w", "1500", "8.8.8.8"],
-            stderr=subprocess.DEVNULL
-        )
-        return True
-    except (subprocess.CalledProcessError, OSError):
-        return False
-
-
-def measure_latency(host, count=4, timeout_ms=1000):
-    """
-    Measure average latency and packet loss to a host using ping.
-    Returns dict: {"avg_ms": float|None, "loss_percent": float, "reachable": bool}
-    """
-    if not host:
-        return {"avg_ms": None, "loss_percent": 100.0, "reachable": False}
-
-    try:
-        output = subprocess.check_output(
-            ["ping", "-n", str(count), "-w", str(timeout_ms), host],
-            text=True,
-            stderr=subprocess.STDOUT,
-            encoding="utf-8",
-            errors="ignore"
-        )
-
-        # Parse packet loss (Windows: "Lost = X (Y% loss)")
-        loss_match = re.search(r"Lost\s*=\s*\d+\s*\((\d+)%\s*loss\)", output, re.IGNORECASE)
-        loss_percent = float(loss_match.group(1)) if loss_match else 0.0
-
-        # Parse Average latency (Windows: "Average = XXms")
-        avg_match = re.search(r"Average\s*=\s*(\d+)ms", output, re.IGNORECASE)
-        avg_ms = float(avg_match.group(1)) if avg_match else None
-
-        reachable = loss_percent < 100
-
+    if dns_ok():
         return {
-            "avg_ms": avg_ms,
-            "loss_percent": loss_percent,
-            "reachable": reachable
+            "avg_ms": None,
+            "loss_percent": 0.0,
+            "reachable": True,
+            "method": "dns",
+            "note": "DNS OK",
         }
 
-    except (subprocess.CalledProcessError, OSError):
-        return {"avg_ms": None, "loss_percent": 100.0, "reachable": False}
+    return {
+        "avg_ms": None,
+        "loss_percent": 100.0,
+        "reachable": False,
+        "method": "none",
+        "note": "All probes failed",
+    }
 
 
-def get_network_info():
-    """
-    Main Network Diagnostic function.
-    Includes connectivity tests + latency measurements.
-    """
-    (
-        adapter,
-        ip,
-        mac,
-        netmask
-    ) = get_active_adapter()
+def get_network_info() -> dict:
+    adapter = _pick_adapter()
+    gateway = _default_gateway() or "n/a"
 
-    gateway, route_ip = get_default_gateway()
+    gw_result = (
+        ping_host(gateway, count=1)
+        if gateway != "n/a"
+        else {"avg_ms": None, "loss_percent": 100.0, "reachable": False, "method": "icmp"}
+    )
 
-    gateway_ok = check_gateway(gateway)
-    dns_ok = check_dns()
-    internet_ok = check_internet()
+    dns = dns_ok()
+    inet_result = _probe_internet()
 
-    # Latency measurements
-    gateway_latency = measure_latency(gateway, count=4)
-    internet_latency = measure_latency("8.8.8.8", count=4)
+    gateway_ok = bool(gw_result.get("reachable"))
+    # HARD RULE: DNS success means internet path works
+    internet_ok = bool(inet_result.get("reachable")) or bool(dns)
 
-    # Status logic
-    if not adapter:
-        status = "No Active Network"
-    elif not gateway:
-        status = "No Gateway"
-    elif not gateway_ok:
-        status = "Gateway Unreachable"
-    elif not dns_ok:
-        status = "DNS Failure"
-    elif not internet_ok:
+    if internet_ok:
+        status = "Internet OK"
+    elif gateway_ok:
         status = "Internet Unreachable"
     else:
-        status = "Internet OK"
+        status = "Gateway Issue"
 
     return {
-        "adapter": adapter,
-        "ip": ip,
-        "netmask": netmask,
-        "mac": mac,
+        "adapter": adapter["adapter"],
+        "ip": adapter["ip"],
+        "mac": adapter["mac"],
         "gateway": gateway,
         "gateway_ok": gateway_ok,
-        "dns_ok": dns_ok,
+        "dns_ok": dns,
         "internet_ok": internet_ok,
         "status": status,
-        "gateway_latency": gateway_latency,
-        "internet_latency": internet_latency
+        "gateway_latency": {
+            "avg_ms": gw_result.get("avg_ms"),
+            "loss_percent": gw_result.get("loss_percent", 0),
+            "reachable": gateway_ok,
+        },
+        "internet_latency": {
+            "avg_ms": inet_result.get("avg_ms"),
+            "loss_percent": 0.0 if internet_ok else 100.0,
+            "reachable": internet_ok,
+            "method": inet_result.get("method") if internet_ok else "none",
+            "note": inet_result.get("note"),
+        },
     }

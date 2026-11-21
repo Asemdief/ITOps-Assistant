@@ -1,54 +1,44 @@
-def calculate_health(cpu, ram, disk):
-    """
-    Calculate overall system health score and generate specific recommendations.
-    """
+"""Health score calculation."""
+
+from __future__ import annotations
+
+
+def calculate_health(cpu: dict, ram: dict, disk: list) -> dict:
     score = 100
-    recommendations = []
+    recommendations: list[str] = []
 
-    # ---------- CPU ----------
-    cpu_usage = cpu["usage_percent"]
-
-    if cpu_usage > 90:
-        score -= 25
-        recommendations.append("CPU usage is extremely high.")
-    elif cpu_usage > 70:
-        score -= 15
+    cu = float(cpu.get("usage_percent") or 0)
+    if cu >= 90:
+        score -= 20
+        recommendations.append("CPU usage is critically high.")
+    elif cu >= 70:
+        score -= 10
         recommendations.append("CPU usage is above normal.")
 
-    # ---------- RAM ----------
-    ram_usage = ram["usage_percent"]
+    ru = float(ram.get("usage_percent") or 0)
+    if ru >= 90:
+        score -= 20
+        recommendations.append("Memory usage is critically high.")
+    elif ru >= 75:
+        score -= 10
+        recommendations.append("Memory usage is elevated.")
 
-    if ram_usage > 90:
-        score -= 25
-        recommendations.append("RAM usage is critically high.")
-    elif ram_usage > 75:
-        score -= 15
-        recommendations.append("RAM usage is high.")
+    for d in disk or []:
+        pct = float(d.get("usage_percent") or 0)
+        dev = d.get("device", "Drive")
+        if pct >= 95:
+            score -= 18
+            recommendations.append(f"{dev} is critically full ({pct}%). Free space urgently.")
+        elif pct >= 85:
+            score -= 12
+            recommendations.append(
+                f"{dev} is highly used ({pct}%). Clean temporary files and large folders."
+            )
+        elif pct >= 70:
+            score -= 6
+            recommendations.append(f"{dev} is above 70% usage ({pct}%). Monitor free space.")
 
-    # ---------- DISK ----------
-    if disk:
-        for partition in disk:
-            usage = partition["usage_percent"]
-            drive = partition["device"]
-
-            if usage >= 95:
-                score -= 25
-                recommendations.append(
-                    f"{drive} is critically full ({usage}%). Free space immediately."
-                )
-            elif usage >= 85:
-                score -= 15
-                recommendations.append(
-                    f"{drive} is highly used ({usage}%). Clean temporary files and large folders."
-                )
-            elif usage >= 70:
-                score -= 8
-                recommendations.append(
-                    f"{drive} is above 70% usage ({usage}%). Monitor free space."
-                )
-
-    score = max(score, 0)
-
+    score = max(0, min(100, score))
     if score >= 90:
         status = "Excellent"
     elif score >= 75:
@@ -58,8 +48,4 @@ def calculate_health(cpu, ram, disk):
     else:
         status = "Critical"
 
-    return {
-        "score": score,
-        "status": status,
-        "recommendations": recommendations
-    }
+    return {"score": score, "status": status, "recommendations": recommendations}

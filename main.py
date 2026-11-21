@@ -1,7 +1,15 @@
+"""
+ITOps Command — console entry (diagnostics only).
+Prefer gui.py / the windowed .exe for the product UI.
+"""
+
+from __future__ import annotations
+
 import multiprocessing
 import sys
 
-def main():
+
+def main() -> None:
     print("[*] Starting ITOps Assistant...")
     print("[*] Collecting system inventory...")
 
@@ -16,67 +24,62 @@ def main():
     from modules.export import export_report
     from modules.formatter import print_inventory
 
-    data = {}
+    data: dict = {}
 
-    # =====================
-    # Data Collection Layer
-    # =====================
     print("[*] Getting inventory...")
     inventory = get_inventory()
-
     data["system"] = inventory["system"]
     data["cpu"] = inventory["cpu"]
     data["ram"] = inventory["ram"]
     data["disk"] = inventory["disk"]
 
-    print("[*] Running network diagnostics (this may take a few seconds)...")
+    print("[*] Running network diagnostics...")
     data["network"] = get_network_info()
 
     print("[*] Analyzing processes...")
     data["processes"] = get_top_processes()
 
-    # =====================
-    # Analysis Layer
-    # =====================
     print("[*] Calculating health score...")
-    data["health"] = calculate_health(
-        data["cpu"],
-        data["ram"],
-        data["disk"]
-    )
+    data["health"] = calculate_health(data["cpu"], data["ram"], data["disk"])
 
     print("[*] Analyzing root cause...")
     data["root_cause"] = analyze_root_cause(data)
     data["fix_plan"] = generate_fix_plan(data["root_cause"])
 
-    # =====================
-    # Auto-Fix Layer
-    # =====================
     print("[*] Running auto-fixes (if needed)...")
     data["auto_fixes"] = run_auto_fixes(data["root_cause"])
 
-    # =====================
-    # History Layer
-    # =====================
+    print("[*] Security posture scan...")
+    try:
+        from modules.security import run_security_scan, format_text
+
+        data["security"] = run_security_scan()
+        print(format_text(data["security"]))
+    except Exception as e:
+        data["security"] = {"error": str(e), "findings": []}
+        print(f"[!] Security scan skipped: {e}")
+
     print("[*] Checking history...")
     previous = load_previous_report()
     data["changes"] = compare_reports(data, previous)
     save_report(data)
 
-    # =====================
-    # Export Layer
-    # =====================
     print("[*] Exporting reports...")
     data["export"] = export_report(data)
 
-    # =====================
-    # Presentation Layer
-    # =====================
     print("[*] Generating report...\n")
     print_inventory(data)
 
-    print("\n[*] Done. You can close this window.")
-    input("Press Enter to exit...")
+    if data.get("export"):
+        print(f"\n[*] JSON: {data['export'].get('json')}")
+        print(f"[*] HTML: {data['export'].get('html')}")
+
+    print("\n[*] Done.")
+    if sys.stdin and sys.stdin.isatty():
+        try:
+            input("Press Enter to exit...")
+        except EOFError:
+            pass
 
 
 if __name__ == "__main__":

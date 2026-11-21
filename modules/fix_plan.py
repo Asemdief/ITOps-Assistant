@@ -1,68 +1,38 @@
-def generate_fix_plan(root_cause):
-    """
-    Generate prioritized fix plan based on detected issues.
-    """
-    fixes = []
+"""Generate prioritized fix plan from root cause."""
 
-    for issue in root_cause["issues"]:
+from __future__ import annotations
 
-        # ---------- RAM ----------
-        if issue == "High RAM usage":
-            fixes.append({
-                "priority": "MEDIUM",
-                "issue": issue,
-                "fix": "Close high memory consuming processes"
-            })
 
-        # ---------- DISK ----------
-        elif issue.startswith("Critical disk space on"):
-            drive = issue.split("on ")[-1]
-            fixes.append({
-                "priority": "HIGH",
-                "issue": issue,
-                "fix": f"Immediately free space on {drive}. Delete large files or move data to another drive."
-            })
+def generate_fix_plan(root_cause: dict) -> list[dict]:
+    issues = root_cause.get("issues") or []
+    suggestions = root_cause.get("suggestions") or []
+    plan: list[dict] = []
 
-        elif issue.startswith("High disk usage on"):
-            drive = issue.split("on ")[-1]
-            fixes.append({
-                "priority": "MEDIUM",
-                "issue": issue,
-                "fix": f"Clean temporary files, Downloads, and Recycle Bin on {drive}."
-            })
+    for i, issue in enumerate(issues):
+        low = issue.lower()
+        if "internet" in low or "gateway" in low or "dns" in low:
+            priority = "HIGH"
+            fix = suggestions[i] if i < len(suggestions) else "Check network connectivity"
+            if "internet" in low:
+                fix = "Check ISP, physical connection, or router status"
+        elif "high disk" in low:
+            priority = "MEDIUM"
+            fix = suggestions[i] if i < len(suggestions) else "Free disk space"
+            if "d:\\" in low or "d:" in low:
+                fix = "Clean temporary files, Downloads, and Recycle Bin on D:\\."
+            elif "e:\\" in low or "e:" in low:
+                fix = "Monitor free space on E:\\ and remove unused files regularly."
+        elif "elevated disk" in low:
+            priority = "LOW"
+            fix = suggestions[i] if i < len(suggestions) else "Monitor disk space"
+        elif "cpu" in low or "memory" in low:
+            priority = "MEDIUM"
+            fix = suggestions[i] if i < len(suggestions) else "Reduce load"
+        else:
+            priority = "LOW"
+            fix = suggestions[i] if i < len(suggestions) else "Review system status"
+        plan.append({"priority": priority, "issue": issue, "fix": fix})
 
-        elif issue.startswith("Elevated disk usage on"):
-            drive = issue.split("on ")[-1]
-            fixes.append({
-                "priority": "LOW",
-                "issue": issue,
-                "fix": f"Monitor free space on {drive} and remove unused files regularly."
-            })
-
-        # ---------- NETWORK ----------
-        elif issue == "Internet connectivity issue":
-            fixes.append({
-                "priority": "HIGH",
-                "issue": issue,
-                "fix": "Check ISP, physical connection, or router status"
-            })
-
-        elif issue == "DNS resolution issue":
-            fixes.append({
-                "priority": "HIGH",
-                "issue": issue,
-                "fix": "Flush DNS cache (ipconfig /flushdns) and try public DNS (8.8.8.8)"
-            })
-
-        elif issue == "Gateway unreachable":
-            fixes.append({
-                "priority": "HIGH",
-                "issue": issue,
-                "fix": "Check gateway, switch port, or DHCP settings"
-            })
-
-    # Sort by priority (HIGH → MEDIUM → LOW)
-    priority_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
-    fixes.sort(key=lambda x: priority_order.get(x["priority"], 99))
-
-    return fixes
+    order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+    plan.sort(key=lambda x: order.get(x["priority"], 9))
+    return plan
