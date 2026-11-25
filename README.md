@@ -1,196 +1,232 @@
-# 🚀 ITOps Assistant
+# ITOps Command
 
-**Intelligent IT Support automation for Windows endpoints.**
+**Windows endpoint diagnostics and silent remediation — built for IT support.**
 
-ITOps Assistant turns raw system data into actionable diagnostics, prioritized fix plans, and safe automatic remediation — so L1 / Helpdesk engineers spend less time collecting information and more time solving real problems.
+Double-click. No console flash. Structured findings instead of raw numbers. Local HTML/JSON reports only.
 
 ```text
-Instead of:   RAM Usage: 87%
-You get:      High RAM usage detected
-              Top consumers: chrome.exe (1.8 GB), Teams (920 MB)
-              Suggested action: Close unused browser tabs or restart Teams
-              Auto-fix available: Clean TEMP + Empty Recycle Bin
+Instead of:   RAM 87%  ·  Disk C: 91%  ·  Ping failed
+You get:      High memory pressure · Critical free space on C:
+              Top consumers · prioritised fix plan · safe auto-actions
+              Internet OK (DNS/TCP path verified — not ICMP-only)
+```
+
+**Current release:** v1.9.1 (GUI) · Product name **ITOps Command** · Repo **ITOps-Assistant**
+
+---
+
+## Who it’s for
+
+- Helpdesk / L1–L2 support
+- System administrators
+- MSP technicians
+- Small IT teams that need fast, consistent machine checks
+
+---
+
+## Features
+
+### Diagnostics
+
+| Area | What you get |
+|------|----------------|
+| **Inventory** | Host, user, OS, CPU, RAM, disk partitions + status |
+| **Network** | Active adapter (virtual filtered), gateway, DNS, internet path, latency |
+| **Processes** | Top CPU / RAM with system noise filtered |
+| **Health** | Score 0–100 + posture status |
+| **Root cause** | Human-readable issues + suggestions |
+| **History** | Delta vs last successful run |
+| **Export** | Premium HTML + JSON next to the app |
+
+### Silent remediation (safe defaults)
+
+- Clean user TEMP (skips locked/recent files)
+- Flush DNS / clear DNS client cache
+- Empty Recycle Bin when disk pressure is detected
+- No visible `cmd.exe` / PowerShell windows (`modules/win_silent.py`)
+
+### Security posture (read-only scan + opt-in fixes)
+
+- `modules/security.py` — multi-check scan, severity-weighted score, coverage
+- `modules/security_fix.py` — dry-run by default, journal, rollback
+- `modules/registry_io.py` — winreg helpers
+- Fixes are **never** applied without explicit opt-in
+
+### Network HARD RULE
+
+DNS resolution **or** TCP/HTTPS success ⇒ **Internet OK**.  
+ICMP ping failure alone does **not** mark the machine offline (common on restricted networks).
+
+---
+
+## UX
+
+- **CustomTkinter** dark graphite shell (quiet SOC style)
+- Sidebar: Dashboard, Endpoint, Network, Processes, Reports
+- Primary action: **Run diagnostic**
+- KPIs, host/storage panels, findings list — not a terminal dump
+
+---
+
+## Requirements
+
+- Windows 10 / 11
+- Python 3.10+ (for source runs)
+- Dependencies:
+
+```text
+psutil>=5.9.0
+customtkinter>=5.2.0
 ```
 
 ---
 
-## ✨ Current Features
+## Quick start (source)
 
-### 🖥 Inventory Collection
-- System info (hostname, user, OS)
-- CPU name, cores, live usage
-- RAM total / available / usage %
-- Disk partitions with clear status levels (Healthy → Critical)
-
-### 🌐 Network Diagnostics
-- Active adapter detection (filters virtual adapters)
-- Gateway reachability
-- DNS resolution check
-- Internet connectivity test
-- Basic latency measurement
-
-### 📊 Process Analysis
-- Top processes by CPU and by RAM
-- Filters noisy system processes
-- Flags high consumers automatically
-
-### ❤️ Device Health Scoring
-- Overall health score (0–100)
-- Status classification: Excellent / Good / Warning / Critical
-- Risk indicators based on CPU, RAM, and disk thresholds
-
-### 🧠 Root Cause Analysis
-- Correlates CPU, RAM, Disk, and Network signals
-- Human-readable issue list
-- Prioritized suggestions
-
-### 🛠 Fix Planning + Safe Auto-Fixes
-- Generates prioritized remediation plan
-- Safe automatic actions when issues are detected:
-  - Flush DNS cache
-  - Restart DNS Client service
-  - Clean user TEMP folder (skips locked/recent files)
-  - Empty Recycle Bin
-  - Trigger Disk Cleanup (silent mode)
-
-### 📜 History & Change Tracking
-- Saves last report
-- Compares current run vs previous run
-- Highlights what changed
-
-### 📄 Report Export
-- Clean terminal report
-- JSON export
-- HTML report (ready to attach to tickets or send to clients)
-
----
-
-## 🎯 Target Users
-
-- IT Support / Helpdesk (L1–L2)
-- System Administrators
-- MSP technicians
-- Small & medium business IT teams
-
----
-
-## ⚡ Tech Stack
-
-| Component        | Technology                          |
-|------------------|-------------------------------------|
-| Language         | Python 3.10+                        |
-| System metrics   | `psutil`, `py-cpuinfo`              |
-| Network checks   | Built-in + subprocess (Windows)     |
-| Reports          | JSON + HTML                         |
-| Platform         | Windows (primary)                   |
-
----
-
-## 🚀 Quick Start
-
-### 1. Clone
 ```bash
 git clone https://github.com/Asemdief/ITOps-Assistant.git
 cd ITOps-Assistant
+pip install -r requirements.txt
+python gui.py
 ```
 
-### 2. Install dependencies
-```bash
-pip install psutil py-cpuinfo
+Windows helpers (no console):
+
+```bat
+run_gui.vbs
 ```
 
-### 3. Run
-```bash
-python main.py
-```
+or:
 
-> Some auto-fixes (DNS Client restart, Disk Cleanup, Recycle Bin) work better when run as Administrator.
+```bat
+run_gui.bat
+```
 
 ---
 
-## 📁 Project Structure
+## Build standalone `.exe`
+
+```bat
+build_exe.bat
+```
+
+Produces:
+
+```text
+dist\ITOps-Assistant.exe
+```
+
+Flags used: `--onefile --windowed --noconsole` (+ icon / version info when present).
+
+> Run as Administrator when you need stronger remediation or HKLM-related security fixes.
+
+---
+
+## Project layout
 
 ```text
 ITOps-Assistant/
-├── main.py                  # Entry point – orchestrates the full pipeline
+├── gui.py                 # Main entry — CustomTkinter UI + scan orchestration
+├── main.py                # Optional CLI-oriented entry
 ├── modules/
-│   ├── inventory.py         # System / CPU / RAM collection
-│   ├── disk.py              # Disk usage + status
-│   ├── network.py           # Adapter, gateway, DNS, internet, latency
-│   ├── processes.py         # Top CPU / RAM processes
-│   ├── health.py            # Health score engine
-│   ├── root_cause.py        # Issue detection + suggestions
-│   ├── fix_plan.py          # Prioritized remediation plan
-│   ├── fix_engine.py        # Safe auto-fix actions
-│   ├── history.py           # Previous report + change detection
-│   ├── export.py            # JSON + HTML report export
-│   └── formatter.py         # Terminal output formatting
-├── .gitignore
-├── .gitattributes
+│   ├── inventory.py       # System / CPU / RAM / disks
+│   ├── network.py         # Adapters, gateway, DNS, internet probes (HARD RULE)
+│   ├── processes.py       # Top CPU / RAM
+│   ├── health.py          # Score 0–100
+│   ├── root_cause.py      # Findings from telemetry
+│   ├── fix_plan.py        # Prioritised suggestions
+│   ├── fix_engine.py      # Silent auto-fixes
+│   ├── history.py         # Previous run + deltas
+│   ├── export.py          # HTML + JSON reports
+│   ├── paths.py           # App dir (source + frozen exe)
+│   ├── win_silent.py      # CREATE_NO_WINDOW helpers
+│   ├── security.py        # Security posture scan (read-only)
+│   ├── security_fix.py    # Opt-in fixes + journal / rollback
+│   ├── registry_io.py     # Registry access layer
+│   └── config_loader.py   # Optional config
+├── docs/
+│   └── SECURITY_MODULE.md
+├── tests/
+│   └── test_security.py
+├── build_exe.bat
+├── run_gui.bat / run_gui.vbs
+├── version_info.txt
+├── requirements.txt
 └── README.md
+```
+
+### Scan pipeline
+
+1. Inventory  
+2. Network path + probes  
+3. Process pressure  
+4. Health score  
+5. Root-cause matrix  
+6. Silent remediation (when applicable)  
+7. History delta  
+8. Export HTML + JSON  
+
+GUI runs the pipeline on a **background thread**; UI updates stay on the main thread.
+
+---
+
+## Product rules (non-negotiable)
+
+1. **No black console flash** — all system commands via silent helpers  
+2. **Double-click product** — windowed exe for end users  
+3. **Modular backend** — logic in `modules/`; GUI only orchestrates and displays  
+4. **Local reports only** — no cloud egress by default  
+5. **Honest network status** — DNS/TCP path, not ICMP-only  
+
+---
+
+## Tests
+
+```bash
+python -m unittest tests.test_security -v
 ```
 
 ---
 
-## 🗺 Roadmap
+## Roadmap (high level)
 
-### ✅ Version 0.1 (Current)
-- [x] Inventory collection
-- [x] Health scoring
-- [x] Network diagnostics
-- [x] Process analysis
-- [x] Root cause analysis
-- [x] Fix planning
-- [x] Safe auto-fixes
-- [x] History comparison
-- [x] JSON + HTML export
-
-### 🔄 Version 0.2 (Next)
-- [ ] Stronger process → root-cause correlation
-- [ ] Startup programs analyzer
-- [ ] Windows services health check
-- [ ] Event Viewer quick scan (critical errors)
-- [ ] Windows Update status check
-
-### 🚀 Version 0.3
-- [ ] One-click / approved remote fixes
-- [ ] Configurable thresholds
-- [ ] Better disk cleanup profiles
-- [ ] Export to PDF
-
-### 🏗 Version 1.0 (Product)
-- [ ] Lightweight agent + central dashboard
-- [ ] Multi-device inventory
-- [ ] Scheduled scans
-- [ ] Ticketing integrations (webhook / basic)
-- [ ] Simple licensing
+| Phase | Focus | Status |
+|-------|--------|--------|
+| Core diagnostics + auto-fix + export | Local MVP | Done |
+| Packaging (windowed exe) | Distribution | Done |
+| CustomTkinter commercial UI | Sellable shell | Done (v1.9.x) |
+| Security posture tab | Read-only + opt-in fixes | Present in tree |
+| Agent + central dashboard | Multi-device / MSP | Planned |
+| Installer + licensing | Commercial packaging | Planned |
 
 ---
 
-## ⚠️ Notes & Limitations
+## Environments
 
-- Currently **Windows-focused** (uses `ipconfig`, `net`, PowerShell, `cleanmgr`).
-- Auto-fixes are intentionally conservative (safe-by-default).
-- Some actions require Administrator privileges.
-- Virtual network adapters are filtered to reduce noise.
-- This is an active MVP — expect rapid iteration.
+Developed and tested across:
 
----
+| | Home | Work |
+|--|------|------|
+| Example host | ASEM-CORE | Asem-CORE |
+| OS | Windows 10 | Windows 11 |
 
-## 📈 Mission
-
-Reduce repetitive IT support work.  
-Give engineers clear answers instead of raw numbers.  
-Move from “what is the usage?” to “what should I do next?”.
+No drive-letter hardcoding in core logic.
 
 ---
 
-## 📄 License
+## License / commercial use
 
-This project is currently under active development.  
-License will be added in a future release.
+Active development under **ITOps Command**.  
+Contact the maintainer for commercial licensing or custom builds.
 
 ---
 
-**Status:** Active Development 🚧  
-**Maintainer:** [Asemdief](https://github.com/Asemdief)
+## Maintainer
+
+**Asem Dief** · [github.com/Asemdief](https://github.com/Asemdief)
+
+Repository: [github.com/Asemdief/ITOps-Assistant](https://github.com/Asemdief/ITOps-Assistant)
+
+---
+
+**Status:** Active development · Windows-first · Built for operators, not demos.
